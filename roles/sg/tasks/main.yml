@@ -1,0 +1,15 @@
+---
+- name: Create security group ssh
+  ec2_group:
+    name: "{{ ec2_sec_group }}"
+    description: my EC2 sec group
+    region: "{{ region }}"
+    rules:
+      - proto: tcp
+        from_port: 8000
+        to_port: 8000
+        cidr_ip: 0.0.0.0/0
+      - proto: tcp
+        from_port: 22
+        to_port: 22
+        cidr_ip: 0.0.0.0/0

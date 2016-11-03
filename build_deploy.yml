@@ -1,0 +1,91 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - role: build_ami
+      name: ami-build
+
+- name: Configure startup
+  hosts: "ami-build"
+  user: ec2-user
+  become: true
+  tasks:
+    - name: Start python webserver after boot
+      lineinfile:
+        dest: /etc/rc.local
+        state: present
+        regexp: "^cd"
+        insertafter: "^touch"
+        line: "cd /tmp && nohup python -m SimpleHTTPServer 8000 &"
+
+- hosts: localhost
+  connection: local
+  tasks:
+    - name: Create AMI
+      ec2_ami:
+        region: "{{ region }}"
+        name: "webapp-{{ ansible_date_time.iso8601 | regex_replace('[^a-zA-Z0-9]', '-') }}"
+        instance_id: "{{ item.id }}"
+        wait: yes
+      register: ami
+      with_items:
+        - "{{ ec2.instances }}"
+    - name: Configure Elastic Load Balancers
+      ec2_elb_lb:
+        region: "{{ region }}"
+        name: "{{ elb_name }}"
+        state: "{{ state|default('present') }}"
+        zones:
+          - "{{ item }}"
+        listeners:
+          - protocol: "{{ elb_protocol }}"
+            load_balancer_port: "{{ elb_port }}"
+            instance_port: "{{ elb_port }}"
+        health_check:
+          ping_protocol: "{{ elb_protocol }}"
+          ping_port: "{{ elb_port }}"
+          ping_path: "{{ elb_ping_path }}"
+          response_timeout: "{{ elb_response_timeout }}"
+          interval: "{{ elb_interval }}"
+          unhealthy_threshold: "{{ elb_unhealthy_threshold }}"
+          healthy_threshold: "{{ elb_healthy_threshold }}"
+      with_items:
+          - "{{ availability_zones }}"
+      register: elb
+    - name: Create Launch Configuration
+      ec2_lc:
+        region: "{{ region }}"
+        name: "{{ elb_name }}"
+        image_id: "{{ ami.results[0].image_id }}"
+        key_name: "{{ keypair }}"
+        instance_type: "{{ instance_type }}"
+        security_groups: "{{ ec2_sec_group }}"
+    - name: Configure Auto Scaling Group
+      ec2_asg:
+        name: "{{ elb_name }}"
+        region: "{{ region }}"
+        availability_zones: "{{ availability_zones|join(',') }}"
+        launch_config_name: "{{ elb_name }}"
+        health_check_type: "{{ asg_health_check_type }}"
+        health_check_period: "{{ asg_health_check }}"
+        desired_capacity: "{{ asg_desired_capacity | default(1) }}"
+        replace_all_instances: yes
+        replace_batch_size: "{{ asg_replace_batch_size | default(1) }}"
+        min_size: "{{ asg_min_size }}"
+        max_size: "{{ asg_max_size }}"
+        load_balancers:
+          - "{{ elb_name }}"
+        state: present
+    - block:
+        - name: "Check that ELB accept traffic"
+          uri:
+            url: http://{{ elb.results[0].elb.dns_name}}:8000
+            method: GET
+            follow_redirects: safe
+            return_content: yes
+          register: result
+        - name: "Ensure response code 200"
+          assert:
+            that:
+              - "200 == result.status"

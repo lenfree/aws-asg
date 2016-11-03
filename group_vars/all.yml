@@ -1,8 +1,26 @@
 ---
 region: ap-southeast-2
-zone:
+availability_zones:
   - ap-southeast-2a
   - ap-southeast-2b
+  - ap-southeast-2c
 ami: ami-98714dfb
 instance_type: t1.micro
-keypair: mykey
+keypair: ex1_key
+
+ec2_sec_group: mysg
+
+elb_name: webapp
+elb_port: 8000
+elb_protocol: http
+elb_ping_path: /
+elb_interval: 30
+elb_unhealthy_threshold: 6
+elb_healthy_threshold: 2
+elb_response_timeout: 3
+
+asg_health_check_type: ELB
+asg_health_check: 30
+asg_min_size: 2
+asg_max_size: 10
+asg_desired_capacity: 2
