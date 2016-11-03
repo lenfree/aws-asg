@@ -14,7 +14,14 @@ For installation, please refer to http://docs.ansible.com/ansible/intro_installa
 1. Generate ssh key pair and make sure it exists in AWS.
 2. Update ```keypair``` to match the ssh key you created in
 group_vars/all.yml
-3. cat >>~/.ssh/config<<EOF
+
+Usage:
+------
+
+Configure ssh client:
+
+```
+cat >>~/.ssh/config<<EOF
 Host *
   IdentityFile ~/.ssh/<ssh-keyname>
   User ec2-user
@@ -22,9 +29,7 @@ Host *
   forwardagent yes
   GSSAPIAuthentication no
 EOF
-
-Usage:
-------
+```
 
 Build and ship:
 
