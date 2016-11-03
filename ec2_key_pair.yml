@@ -1,0 +1,10 @@
+---
+- name: Configure EC2 key
+  hosts: localhost
+  connection: local
+  tasks:
+  - name: create ec2 key
+    ec2_key:
+      name: "{{ keypair }}"
+      key_material: "{{ item }}"
+    with_file: "./files/{{ keypair }}.pub"
