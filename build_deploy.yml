@@ -11,13 +11,33 @@
   user: ec2-user
   become: true
   tasks:
-    - name: Start python webserver after boot
+    - name: Start go webserver after boot
       lineinfile:
         dest: /etc/rc.local
         state: present
         regexp: "^cd"
         insertafter: "^touch"
-        line: "cd /tmp && nohup python -m SimpleHTTPServer 8000 &"
+        line: "curl -L -o go-myweb http://github.com/lenfree/go-myweb/releases/download/0.0.3/go-myweb-linux-amd64 && chmod +x ./go-myweb && sudo -E ./go-myweb"
+
+    - name: Create pem and key file
+      file:
+        path: "{{ item }}"
+        state: touch
+      with_items:
+        - "{{ ssl_cert_file }}"
+        - "{{ ssl_cert_key_file }}"
+
+    - name: Upload demo ssl cert
+      blockinfile:
+        dest: "{{ ssl_cert_file }}"
+        mode: 0644
+        block: "{{ ssl_cert }}"
+
+    - name: Upload demo ssl private key
+      blockinfile:
+        dest: "{{ ssl_cert_key_file }}"
+        mode: 0600
+        block: "{{ ssl_cert }}"
 
 - hosts: localhost
   connection: local
@@ -31,6 +51,37 @@
       register: ami
       with_items:
         - "{{ ec2.instances }}"
+
+    - name: Make sure local files directory exists
+      file:
+        path: ./files
+        state: directory
+
+    - name: Generate SSL cert for cert manager upload
+      copy:
+        content: "{{ ssl_cert }}"
+        dest: ./files/ssl_cert.pem
+
+    - name: Generate SSL cert key for cert manager upload
+      copy:
+        content: "{{ ssl_priv }}"
+        dest: ./files/ssl_priv.pem
+
+    - name: upload self signed cert
+      iam_cert:
+        name: demo_ssl
+        state: present
+        cert: ./files/ssl_cert.pem
+        key: ./files/ssl_priv.pem
+
+    - name: Get cert ARN for ELB
+      shell: aws iam list-server-certificates | jq ."ServerCertificateMetadataList" | jq '.[0]' | jq '.Arn' | tr -d '"'
+      register: cert
+
+    - pause:
+        prompt: "Give it a few seconds for cert to be available"
+        minutes: 1
+
     - name: Configure Elastic Load Balancers
       ec2_elb_lb:
         region: "{{ region }}"
@@ -42,9 +93,13 @@
           - protocol: "{{ elb_protocol }}"
             load_balancer_port: "{{ elb_port }}"
             instance_port: "{{ elb_port }}"
+          - protocol: "{{ elb_protocol_secure }}"
+            load_balancer_port: "{{ elb_port_secure }}"
+            instance_port: "{{ elb_port_secure }}"
+            ssl_certificate_id: "{{ cert.stdout }}"
         health_check:
-          ping_protocol: "{{ elb_protocol }}"
-          ping_port: "{{ elb_port }}"
+          ping_protocol: "{{ elb_protocol_secure }}"
+          ping_port: "{{ elb_port_secure }}"
           ping_path: "{{ elb_ping_path }}"
           response_timeout: "{{ elb_response_timeout }}"
           interval: "{{ elb_interval }}"
@@ -53,6 +108,7 @@
       with_items:
           - "{{ availability_zones }}"
       register: elb
+
     - name: Create Launch Configuration
       ec2_lc:
         region: "{{ region }}"
@@ -61,6 +117,7 @@
         key_name: "{{ keypair }}"
         instance_type: "{{ instance_type }}"
         security_groups: "{{ ec2_sec_group }}"
+
     - name: Configure Auto Scaling Group
       ec2_asg:
         name: "{{ elb_name }}"
@@ -77,15 +134,27 @@
         load_balancers:
           - "{{ elb_name }}"
         state: present
+
     - block:
         - name: "Check that ELB accept traffic"
           uri:
-            url: http://{{ elb.results[0].elb.dns_name}}:8000
+            url: http://{{ elb.results[0].elb.dns_name }}
             method: GET
             follow_redirects: safe
             return_content: yes
+            validate_certs: no
           register: result
+
         - name: "Ensure response code 200"
           assert:
             that:
               - "200 == result.status"
+
+        - name: "Ensure request redirect"
+          assert:
+            that:
+              - "true == result.redirected"
+
+        - name: Return ELB address
+          pause:
+            prompt: "ELB address is http://{{ elb.results[0].elb.dns_name }}, press ENTER to continue"
